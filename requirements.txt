@@ -1,0 +1,8 @@
+pyrogram
+tgcrypto
+pillow
+py7zr
+requests
+beautifulsoup4
+flask
+schedule
