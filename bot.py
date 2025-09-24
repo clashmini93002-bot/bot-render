@@ -25,8 +25,7 @@ API_HASH = os.environ.get("API_HASH", "")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 IMGBB_API_KEY = os.environ.get("IMGBB_API_KEY", "")
 TELEGRAPH_TOKEN = os.environ.get("TELEGRAPH_TOKEN", "")
-RENDER_INSTANCE_ID = os.environ.get("RENDER_INSTANCE_ID", "")
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")
+RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL", "")
 
 # ---------------------------
 # Configuración de Flask para Webhook
@@ -59,6 +58,8 @@ valid_keys = set()  # Keys que han funcionado correctamente
 failed_keys = set()  # Keys que han fallado
 pending_key_requests = {}  # {chat_id: {"status_msg": Message, "image_sources": list, "current_index": int, "processed_links": list, "errors": list}}
 active_listeners = {}  # {chat_id: {"event": asyncio.Event, "response": str}}
+ping_counter = 0
+start_time = time.time()
 
 # ---------------------------
 # Utilidades
@@ -864,85 +865,128 @@ async def bot_status(client: Client, message: Message):
 # ---------------------------
 @web_app.route('/')
 def home():
+    uptime_minutes = (time.time() - start_time) / 60
     return jsonify({
         "status": "online",
         "service": "Telegram Smart ZIP Bot",
-        "instance": RENDER_INSTANCE_ID,
+        "ping_count": ping_counter,
+        "uptime_minutes": round(uptime_minutes, 1),
         "timestamp": time.time()
     })
 
 @web_app.route('/health')
 def health_check():
-    return jsonify({"status": "healthy", "timestamp": time.time()})
-
-@web_app.route('/webhook', methods=['POST'])
-def webhook():
-    """Endpoint para webhook de Telegram (opcional)"""
-    try:
-        update = request.get_json()
-        print(f"Webhook recibido: {update}")
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        print(f"Error en webhook: {e}")
-        return jsonify({"status": "error", "error": str(e)}), 500
+    return jsonify({
+        "status": "healthy", 
+        "ping_count": ping_counter,
+        "timestamp": time.time()
+    })
 
 @web_app.route('/ping')
 def ping():
     """Endpoint para self-ping"""
-    return jsonify({"status": "pong", "timestamp": time.time()})
+    return jsonify({
+        "status": "pong", 
+        "ping_count": ping_counter,
+        "timestamp": time.time()
+    })
+
+@web_app.route('/status')
+def status():
+    """Endpoint detallado de estado"""
+    uptime_minutes = (time.time() - start_time) / 60
+    return jsonify({
+        "service": "Telegram ZIP Bot",
+        "status": "online",
+        "uptime_minutes": round(uptime_minutes, 1),
+        "ping_count": ping_counter,
+        "keys_configured": len(current_imgbb_keys),
+        "valid_keys": len(valid_keys),
+        "timestamp": time.time()
+    })
 
 # ---------------------------
 # Self-ping para mantener vivo el servicio
 # ---------------------------
 def self_ping():
     """Función para hacer self-ping cada 5 minutos"""
-    if WEBHOOK_URL:
+    global ping_counter
+    if RENDER_EXTERNAL_URL:
         try:
-            response = requests.get(f"{WEBHOOK_URL}/ping", timeout=10)
-            print(f"✅ Self-ping realizado: {response.status_code} - {time.strftime('%Y-%m-%d %H:%M:%S')}")
+            response = requests.get(f"{RENDER_EXTERNAL_URL}/ping", timeout=10)
+            ping_counter += 1
+            uptime_minutes = (time.time() - start_time) / 60
+            print(f"✅ Ping #{ping_counter} - Status: {response.status_code} - Uptime: {uptime_minutes:.1f} min - {time.strftime('%H:%M:%S')}")
         except Exception as e:
-            print(f"❌ Error en self-ping: {e}")
+            print(f"❌ Error en ping #{ping_counter}: {e}")
 
 def start_scheduler():
     """Inicia el scheduler para self-ping"""
+    print("🕐 Iniciando scheduler de self-ping (cada 5 minutos)...")
+    
+    # Primer ping inmediato
+    self_ping()
+    
+    # Programar ping cada 5 minutos
     schedule.every(5).minutes.do(self_ping)
     
     while True:
         schedule.run_pending()
         time.sleep(1)
+        
+# ---------------------------
+# Comando de estado mejorado
+# ---------------------------
+@app.on_message(filters.command("status"))
+async def bot_status(client: Client, message: Message):
+    chat_id = message.chat.id
+    uptime_minutes = (time.time() - start_time) / 60
+    
+    status_info = "🤖 **Estado del Bot:**\n"
+    status_info += f"• 🕐 Uptime: {uptime_minutes:.1f} minutos\n"
+    status_info += f"• 📊 Pings realizados: {ping_counter}\n"
+    status_info += f"• 🔑 Keys configuradas: {len(current_imgbb_keys)}\n"
+    status_info += f"• ✅ Keys válidas: {len(valid_keys)}\n"
+    status_info += f"• 🌐 URL: {RENDER_EXTERNAL_URL}\n"
+    status_info += f"• 🚀 Estado: 🟢 **EN LÍNEA**\n"
+    status_info += f"• ⏰ Último ping: {time.strftime('%H:%M:%S')}"
+    
+    await client.send_message(chat_id, status_info)
 
 # ---------------------------
 # Arranque mejorado para Render
 # ---------------------------
 def start_flask_app():
-    """Inicia la aplicación Flask en un puerto específico"""
+    """Inicia la aplicación Flask"""
     port = int(os.environ.get("PORT", 10000))
+    print(f"🌐 Iniciando servidor Flask en puerto {port}...")
     web_app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
 
 async def main():
     """Función principal asincrónica"""
-    # Inicializar las API keys
     initialize_imgbb_keys()
     
     print("🤖 Iniciando Telegram Bot...")
-    print(f"🌐 Webhook URL: {WEBHOOK_URL}")
-    print(f"🆔 Instance ID: {RENDER_INSTANCE_ID}")
+    print(f"🌐 URL Externa: {RENDER_EXTERNAL_URL}")
     
     try:
         await app.start()
         print("✅ Bot de Telegram iniciado correctamente")
         
-        # Obtener información del bot
+        # Información del bot
         me = await app.get_me()
         print(f"🔗 Bot: @{me.username} ({me.first_name})")
         
-        # Iniciar el scheduler de self-ping en un hilo separado
-        if WEBHOOK_URL:
+        # Iniciar scheduler si hay URL configurada
+        if RENDER_EXTERNAL_URL:
             scheduler_thread = threading.Thread(target=start_scheduler, daemon=True)
             scheduler_thread.start()
-            print("🕐 Scheduler de self-ping iniciado (cada 5 minutos)")
+            print("✅ Scheduler de self-ping iniciado")
+        else:
+            print("⚠️ Self-ping desactivado (no hay URL configurada)")
         
         # Mantener el bot corriendo
+        print("🚀 Bot completamente operativo")
         await asyncio.Event().wait()
         
     except Exception as e:
@@ -954,24 +998,20 @@ if __name__ == "__main__":
     from pathlib import Path
     Path(TMP_DIR).mkdir(parents=True, exist_ok=True)
     
-    # Verificar variables críticas
     if not BOT_TOKEN:
         print("❌ BOT_TOKEN no configurado")
         exit(1)
     
-    # Iniciar Flask en un hilo separado
+    # Iniciar Flask en hilo separado
     flask_thread = threading.Thread(target=start_flask_app, daemon=True)
     flask_thread.start()
-    print("🌐 Servidor Flask iniciado")
     
     # Ejecutar el bot
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
-            # Si ya hay un loop corriendo (como en notebooks)
             loop.create_task(main())
         else:
-            # Loop nuevo
             loop.run_until_complete(main())
     except KeyboardInterrupt:
         print("👋 Bot detenido por el usuario")
