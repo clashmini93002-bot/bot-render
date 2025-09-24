@@ -861,7 +861,45 @@ async def bot_status(client: Client, message: Message):
     await client.send_message(chat_id, status_info)
 
 # ---------------------------
-# Webhook Routes para Render
+# Self-ping mejorado
+# ---------------------------
+def self_ping():
+    """Función para hacer self-ping cada 5 minutos"""
+    global ping_counter
+    try:
+        response = requests.get(f"{RENDER_EXTERNAL_URL}/ping", timeout=10)
+        ping_counter += 1
+        uptime_minutes = (time.time() - start_time) / 60
+        print(f"✅ Ping #{ping_counter} - Status: {response.status_code} - Uptime: {uptime_minutes:.1f} min - {time.strftime('%H:%M:%S')}")
+    except Exception as e:
+        print(f"❌ Error en ping #{ping_counter}: {e}")
+
+def start_scheduler():
+    """Inicia el scheduler para self-ping"""
+    print("🕐 Iniciando scheduler de self-ping (cada 5 minutos)...")
+    
+    # Esperar un poco para que todo esté listo
+    time.sleep(10)
+    
+    # Primer ping inmediato
+    print("🔔 Realizando primer ping...")
+    self_ping()
+    
+    # Programar ping cada 5 minutos
+    schedule.every(5).minutes.do(self_ping)
+    print("✅ Scheduler configurado para ping cada 5 minutos")
+    
+    # Bucle principal del scheduler
+    while True:
+        try:
+            schedule.run_pending()
+            time.sleep(30)  # Revisar cada 30 segundos
+        except Exception as e:
+            print(f"❌ Error en scheduler: {e}")
+            time.sleep(60)
+
+# ---------------------------
+# Webhook Routes
 # ---------------------------
 @web_app.route('/')
 def home():
@@ -871,7 +909,8 @@ def home():
         "service": "Telegram Smart ZIP Bot",
         "ping_count": ping_counter,
         "uptime_minutes": round(uptime_minutes, 1),
-        "timestamp": time.time()
+        "timestamp": time.time(),
+        "message": "Bot funcionando correctamente"
     })
 
 @web_app.route('/health')
@@ -888,7 +927,8 @@ def ping():
     return jsonify({
         "status": "pong", 
         "ping_count": ping_counter,
-        "timestamp": time.time()
+        "timestamp": time.time(),
+        "message": "Ping recibido correctamente"
     })
 
 @web_app.route('/status')
@@ -902,38 +942,10 @@ def status():
         "ping_count": ping_counter,
         "keys_configured": len(current_imgbb_keys),
         "valid_keys": len(valid_keys),
+        "bot_online": True,
         "timestamp": time.time()
     })
 
-# ---------------------------
-# Self-ping para mantener vivo el servicio
-# ---------------------------
-def self_ping():
-    """Función para hacer self-ping cada 5 minutos"""
-    global ping_counter
-    if RENDER_EXTERNAL_URL:
-        try:
-            response = requests.get(f"{RENDER_EXTERNAL_URL}/ping", timeout=10)
-            ping_counter += 1
-            uptime_minutes = (time.time() - start_time) / 60
-            print(f"✅ Ping #{ping_counter} - Status: {response.status_code} - Uptime: {uptime_minutes:.1f} min - {time.strftime('%H:%M:%S')}")
-        except Exception as e:
-            print(f"❌ Error en ping #{ping_counter}: {e}")
-
-def start_scheduler():
-    """Inicia el scheduler para self-ping"""
-    print("🕐 Iniciando scheduler de self-ping (cada 5 minutos)...")
-    
-    # Primer ping inmediato
-    self_ping()
-    
-    # Programar ping cada 5 minutos
-    schedule.every(5).minutes.do(self_ping)
-    
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
-        
 # ---------------------------
 # Comando de estado mejorado
 # ---------------------------
@@ -949,12 +961,12 @@ async def bot_status(client: Client, message: Message):
     status_info += f"• ✅ Keys válidas: {len(valid_keys)}\n"
     status_info += f"• 🌐 URL: {RENDER_EXTERNAL_URL}\n"
     status_info += f"• 🚀 Estado: 🟢 **EN LÍNEA**\n"
-    status_info += f"• ⏰ Último ping: {time.strftime('%H:%M:%S')}"
+    status_info += f"• ⏰ Última verificación: {time.strftime('%H:%M:%S')}"
     
     await client.send_message(chat_id, status_info)
 
 # ---------------------------
-# Arranque mejorado para Render
+# Arranque mejorado
 # ---------------------------
 def start_flask_app():
     """Inicia la aplicación Flask"""
@@ -977,16 +989,24 @@ async def main():
         me = await app.get_me()
         print(f"🔗 Bot: @{me.username} ({me.first_name})")
         
-        # Iniciar scheduler si hay URL configurada
-        if RENDER_EXTERNAL_URL:
-            scheduler_thread = threading.Thread(target=start_scheduler, daemon=True)
-            scheduler_thread.start()
-            print("✅ Scheduler de self-ping iniciado")
-        else:
-            print("⚠️ Self-ping desactivado (no hay URL configurada)")
+        # Iniciar scheduler en un hilo separado
+        print("🕐 Iniciando sistema de self-ping...")
+        scheduler_thread = threading.Thread(target=start_scheduler, daemon=True)
+        scheduler_thread.start()
+        print("✅ Sistema de self-ping iniciado")
+        
+        # Verificar que el servidor web esté respondiendo
+        time.sleep(5)
+        try:
+            response = requests.get(f"{RENDER_EXTERNAL_URL}/health", timeout=10)
+            print(f"🌐 Servidor web respondiendo: {response.status_code}")
+        except Exception as e:
+            print(f"⚠️ Servidor web no responde: {e}")
+        
+        print("🚀 Bot completamente operativo y en línea 24/7")
+        print("💡 Usa /status en Telegram para ver el estado")
         
         # Mantener el bot corriendo
-        print("🚀 Bot completamente operativo")
         await asyncio.Event().wait()
         
     except Exception as e:
@@ -1003,8 +1023,12 @@ if __name__ == "__main__":
         exit(1)
     
     # Iniciar Flask en hilo separado
+    print("🚀 Iniciando aplicación...")
     flask_thread = threading.Thread(target=start_flask_app, daemon=True)
     flask_thread.start()
+    
+    # Pequeña pausa para que Flask se inicie
+    time.sleep(3)
     
     # Ejecutar el bot
     try:
